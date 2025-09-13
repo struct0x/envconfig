@@ -385,6 +385,10 @@ func parseInt(inp reflect.Value, value string, base, bitSize int) error {
 }
 
 func split(s string) []string {
+	if s == "" {
+		return nil
+	}
+
 	raw := strings.Split(s, ",")
 	out := make([]string, 0, len(raw))
 	for _, it := range raw {
