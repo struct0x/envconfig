@@ -327,8 +327,11 @@ func setValue(inp reflect.Value, value string) error {
 			inp.Set(reflect.Append(inp, elem))
 		}
 	case reflect.Map:
-		mp := reflect.MakeMap(inp.Type())
 		arr := split(value)
+		if len(arr) == 0 {
+			return nil
+		}
+		mp := reflect.MakeMap(inp.Type())
 		for i := 0; i < len(arr); i++ {
 			kv := strings.SplitN(arr[i], "=", 2)
 			if len(kv) != 2 {

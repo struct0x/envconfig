@@ -141,6 +141,7 @@ func TestEnvFileReader(t *testing.T) {
 		})
 	}
 }
+
 func TestEnvFileReaderUnknownFile(t *testing.T) {
 	defer func() {
 		_ = recover()
