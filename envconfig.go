@@ -388,10 +388,7 @@ func split(s string) []string {
 	raw := strings.Split(s, ",")
 	out := make([]string, 0, len(raw))
 	for _, it := range raw {
-		it = strings.TrimSpace(it)
-		if it != "" {
-			out = append(out, it)
-		}
+		out = append(out, strings.TrimSpace(it))
 	}
 	return out
 }

@@ -309,3 +309,110 @@ func (c *CustomTextUnmarshaler) UnmarshalText(text []byte) error {
 func ptr[T any](t T) *T {
 	return &t
 }
+
+func TestEmptySliceMapParsing(t *testing.T) {
+	type Config struct {
+		Strings []string       `env:"STRINGS"`
+		IntMap  map[string]int `env:"INT_MAP"`
+	}
+
+	le := func(key string) (string, bool) {
+		switch key {
+		case "STRINGS":
+			return "", true
+		case "INT_MAP":
+			return "", true
+		}
+		return "", false
+	}
+
+	var cfg Config
+	err := envconfig.Read(&cfg, le)
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+
+	if cfg.Strings != nil {
+		t.Errorf("Expected nil slice, got %v", cfg.Strings)
+	}
+	if cfg.IntMap != nil {
+		t.Errorf("Expected nil map, got %v", cfg.IntMap)
+	}
+}
+
+func TestNestedStructPrefixHandling(t *testing.T) {
+	type SubConfig struct {
+		Port int `env:"PORT"`
+	}
+
+	type Config struct {
+		Sub1 SubConfig `envPrefix:"APP1"`
+		Sub2 SubConfig `envPrefix:"APP2"`
+	}
+
+	le := func(key string) (string, bool) {
+		switch key {
+		case "APP1_PORT":
+			return "8080", true
+		case "APP2_PORT":
+			return "9090", true
+		}
+		return "", false
+	}
+
+	var cfg Config
+	err := envconfig.Read(&cfg, le)
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+
+	if cfg.Sub1.Port != 8080 || cfg.Sub2.Port != 9090 {
+		t.Errorf("Incorrect port values: Sub1=%d, Sub2=%d", cfg.Sub1.Port, cfg.Sub2.Port)
+	}
+}
+
+func TestEmptyStringDefaultValue(t *testing.T) {
+	type Config struct {
+		Value string `env:"VALUE" envDefault:"default"`
+	}
+
+	le := func(key string) (string, bool) {
+		if key == "VALUE" {
+			return "", true // Explicitly set to empty
+		}
+		return "", false
+	}
+
+	var cfg Config
+	err := envconfig.Read(&cfg, le)
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+
+	if cfg.Value != "" {
+		t.Errorf("Expected empty string, got %q", cfg.Value)
+	}
+}
+
+func TestEmptySlice(t *testing.T) {
+	type Config struct {
+		Value []string `env:"VALUE"`
+	}
+
+	le := func(key string) (string, bool) {
+		if key == "VALUE" {
+			return ",,,,", true
+		}
+		return "", false
+	}
+
+	var cfg Config
+	err := envconfig.Read(&cfg, le)
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+
+	if len(cfg.Value) != 5 {
+		t.Errorf("Expected empty string, got %q", cfg.Value)
+	}
+}
