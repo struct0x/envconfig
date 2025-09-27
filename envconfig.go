@@ -137,7 +137,7 @@ func read(le func(string) (string, bool), prefix string, holder any) error {
 		fieldVal := holderValue.FieldByName(field.Name)
 
 		if !hasEnv && !hasPrefix && !field.Anonymous && fieldVal.CanSet() {
-			return fmt.Errorf("envconfig: field %q does not have \"env\" or \"envPrefix\" tags. Ignore it explicity with `env:\"-\"` or embed to treat it flat", field.Name)
+			return fmt.Errorf("envconfig: field %q does not have \"env\" or \"envPrefix\" tags. Ignore it explicitly with `env:\"-\"` or embed to treat it flat", field.Name)
 		}
 
 		ft := field.Type
@@ -277,34 +277,27 @@ func setValue(inp reflect.Value, value string) error {
 			return err
 		}
 		inp.SetBool(b)
-	case reflect.Int:
-		i, err := strconv.Atoi(value)
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		bits := inp.Type().Bits()
+		i, err := strconv.ParseInt(value, 10, bits)
 		if err != nil {
 			return err
 		}
-		inp.SetInt(int64(i))
-	case reflect.Int8:
-		return parseInt(inp, value, 10, 8)
-	case reflect.Int16:
-		return parseInt(inp, value, 10, 16)
-	case reflect.Int32:
-		return parseInt(inp, value, 10, 32)
-	case reflect.Int64:
-		return parseInt(inp, value, 10, 64)
-	case reflect.Uint:
-		return parseUint(inp, value, 10, 0)
-	case reflect.Uint8:
-		return parseUint(inp, value, 10, 8)
-	case reflect.Uint16:
-		return parseUint(inp, value, 10, 16)
-	case reflect.Uint32:
-		return parseUint(inp, value, 10, 32)
-	case reflect.Uint64:
-		return parseUint(inp, value, 10, 64)
-	case reflect.Float32:
-		return parseFloat(inp, value, 32)
-	case reflect.Float64:
-		return parseFloat(inp, value, 64)
+		inp.SetInt(i)
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+		bits := inp.Type().Bits()
+		u, err := strconv.ParseUint(value, 10, bits)
+		if err != nil {
+			return err
+		}
+		inp.SetUint(u)
+	case reflect.Float32, reflect.Float64:
+		bits := inp.Type().Bits()
+		f, err := strconv.ParseFloat(value, bits)
+		if err != nil {
+			return err
+		}
+		inp.SetFloat(f)
 	case reflect.Array:
 		arr := split(value)
 		if len(arr) < inp.Len() {
@@ -354,33 +347,6 @@ func setValue(inp reflect.Value, value string) error {
 		return fmt.Errorf("unsupported type %q it's not primitive nor implements supported unmarshaling interfaces", inp.Type())
 	}
 
-	return nil
-}
-
-func parseFloat(inp reflect.Value, value string, bitSize int) error {
-	f, err := strconv.ParseFloat(value, bitSize)
-	if err != nil {
-		return err
-	}
-	inp.SetFloat(f)
-	return nil
-}
-
-func parseUint(inp reflect.Value, value string, base int, bitSize int) error {
-	i, err := strconv.ParseUint(value, base, bitSize)
-	if err != nil {
-		return err
-	}
-	inp.SetUint(i)
-	return nil
-}
-
-func parseInt(inp reflect.Value, value string, base, bitSize int) error {
-	i, err := strconv.ParseInt(value, base, bitSize)
-	if err != nil {
-		return err
-	}
-	inp.SetInt(i)
 	return nil
 }
 
