@@ -1,9 +1,11 @@
 # envconfig
-A small,
-dependency-free Go library for loading configuration from environment variables directly into your structs.
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/struct0x/envconfig.svg)](https://pkg.go.dev/github.com/struct0x/envconfig)
 [![Go Report Card](https://goreportcard.com/badge/github.com/struct0x/envconfig)](https://goreportcard.com/report/github.com/struct0x/envconfig)
+![Coverage](https://img.shields.io/badge/Coverage-87.6%25-brightgreen)
+
+A small,
+dependency-free Go library for loading configuration from environment variables directly into your structs.
 
 It supports nested structs, prefixes, defaults, required fields,
 slices, maps, arrays, pointers, durations, and custom (un)marshalers.
