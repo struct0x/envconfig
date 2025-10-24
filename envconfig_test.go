@@ -83,6 +83,21 @@ func TestReadValues(t *testing.T) {
 		CustomTextUnmarshaler: CustomTextUnmarshaler{
 			Value: "***custom***",
 		},
+		CustomBinaryUnmarshaler: CustomBinaryUnmarshaler{
+			Value: "***custom2***",
+		},
+		CustomJSONUnmarshaler: CustomJSONUnmarshaler{
+			Value: "***custom3***",
+		},
+		CustomTextUnmarshaler2: CustomTextUnmarshaler{
+			Value: "***custom***",
+		},
+		CustomBinaryUnmarshaler2: CustomBinaryUnmarshaler{
+			Value: "***custom2***",
+		},
+		CustomJSONUnmarshaler2: CustomJSONUnmarshaler{
+			Value: "***custom3***",
+		},
 		Duration: time.Hour,
 		SliceDuration: []time.Duration{
 			time.Hour,
@@ -281,10 +296,16 @@ type Config struct {
 	StringDefault string `env:"MISSING" envDefault:"Default Value"`
 	MissingValue  string `env:"MISSING"`
 
-	CustomTextUnmarshaler CustomTextUnmarshaler    `env:"CUSTOM"`
-	Duration              time.Duration            `env:"DURATION"`
-	SliceDuration         []time.Duration          `env:"SDUR"`
-	MapDuration           map[string]time.Duration `env:"MDUR"`
+	CustomTextUnmarshaler   CustomTextUnmarshaler   `envPrefix:"CUSTOM"`
+	CustomBinaryUnmarshaler CustomBinaryUnmarshaler `envPrefix:"CUSTOM"`
+	CustomJSONUnmarshaler   CustomJSONUnmarshaler   `envPrefix:"CUSTOM"`
+
+	CustomTextUnmarshaler2   CustomTextUnmarshaler    `env:"CUSTOM"`
+	CustomBinaryUnmarshaler2 CustomBinaryUnmarshaler  `env:"CUSTOM"`
+	CustomJSONUnmarshaler2   CustomJSONUnmarshaler    `env:"CUSTOM"`
+	Duration                 time.Duration            `env:"DURATION"`
+	SliceDuration            []time.Duration          `env:"SDUR"`
+	MapDuration              map[string]time.Duration `env:"MDUR"`
 }
 
 type SubConfig struct {
@@ -298,11 +319,29 @@ type SubSubConfig struct {
 }
 
 type CustomTextUnmarshaler struct {
-	Value string
+	Value string `env:"VALUE"`
 }
 
 func (c *CustomTextUnmarshaler) UnmarshalText(text []byte) error {
 	c.Value = "***" + string(text) + "***"
+	return nil
+}
+
+type CustomBinaryUnmarshaler struct {
+	Value string `env:"VALUE"`
+}
+
+func (c *CustomBinaryUnmarshaler) UnmarshalBinary(text []byte) error {
+	c.Value = "***" + string(text) + "2***"
+	return nil
+}
+
+type CustomJSONUnmarshaler struct {
+	Value string `env:"VALUE"`
+}
+
+func (c *CustomJSONUnmarshaler) UnmarshalJSON(text []byte) error {
+	c.Value = "***" + string(text) + "3***"
 	return nil
 }
 
@@ -414,5 +453,28 @@ func TestEmptySlice(t *testing.T) {
 
 	if len(cfg.Value) != 5 {
 		t.Errorf("Expected empty string, got %q", cfg.Value)
+	}
+}
+
+type ConfigWithValidation struct {
+	Value string `env:"VALUE"`
+}
+
+func (c *ConfigWithValidation) Validate() error {
+	return envconfig.Assert(
+		envconfig.Custom(c.Value != "invalid", "VALUE", "invalid value"),
+	)
+}
+
+func TestValidation(t *testing.T) {
+	le := func(key string) (string, bool) {
+		return "invalid", true
+	}
+
+	var cfg ConfigWithValidation
+
+	err := envconfig.Read(&cfg, le)
+	if err == nil {
+		t.Errorf("Expected error")
 	}
 }
