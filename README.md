@@ -32,11 +32,22 @@ import (
 )
 
 type HTTPServer struct {
+	Env     string            `env:"ENV"`
 	Host    string            `env:"HOST" envDefault:"127.0.0.1"`
 	Port    int               `env:"PORT" envRequired:"true"`
 	Enabled bool              `env:"ENABLED"`
 	Tags    []string          `env:"TAGS"`    // "a,b,c" -> []string{"a","b","c"}
 	Headers map[string]string `env:"HEADERS"` // "k1=v1,k2=v2"
+}
+
+func (cfg HTTPServer) Validate() error {
+	return envconfig.Assert(
+		envconfig.OneOf(cfg.Env, "ENVIRONMENT", "production", "prod"),
+		envconfig.Not(
+			envconfig.Range(cfg.Port, 0, 1023, "PORT"),
+			"PORT: must not be a reserved port (0-1023)",
+		),
+	)
 }
 
 func main() {
@@ -49,6 +60,7 @@ func main() {
 
 	fmt.Printf("%+v\n", cfg)
 }
+
 ```
 
 Example environment:

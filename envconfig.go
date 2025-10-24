@@ -88,6 +88,7 @@ import (
 //   - Parsing/conversion failures return errors that include the env key.
 //   - Unsupported leaf types (that do not implement a supported unmarshal
 //     interface) cause an error.
+//   - any type can implement Validator interface, and it will be called as soon as value if populated.
 //
 // Note on empties:
 //
@@ -114,6 +115,10 @@ func Read[T any](holder *T, lookupEnv ...func(string) (string, bool)) error {
 	return read(lookupEnvFunc, "", holder)
 }
 
+type Validator interface {
+	Validate() error
+}
+
 func read(le func(string) (string, bool), prefix string, holder any) error {
 	if len(prefix) > 0 {
 		if err, ok := tryUnmarshalKnownInterface(le, prefix, holder); ok {
@@ -121,7 +126,8 @@ func read(le func(string) (string, bool), prefix string, holder any) error {
 		}
 	}
 
-	holderValue := reflect.ValueOf(holder).Elem()
+	holderPtr := reflect.ValueOf(holder)
+	holderValue := holderPtr.Elem()
 	fields := reflect.VisibleFields(holderValue.Type())
 
 	for _, field := range fields {
@@ -196,6 +202,18 @@ func read(le func(string) (string, bool), prefix string, holder any) error {
 
 		if err := setValue(fieldVal, envVal); err != nil {
 			return fmt.Errorf("envconfig: %q failed to populate: %w", field.Name, err)
+		}
+
+		if validator, ok := reflect.TypeAssert[Validator](fieldVal); ok {
+			if err := validator.Validate(); err != nil {
+				return fmt.Errorf("envconfig: %q failed to validate: %w", field.Name, err)
+			}
+		}
+	}
+
+	if validator, ok := reflect.TypeAssert[Validator](holderPtr); ok {
+		if err := validator.Validate(); err != nil {
+			return fmt.Errorf("envconfig: failed to validate: %w", err)
 		}
 	}
 
