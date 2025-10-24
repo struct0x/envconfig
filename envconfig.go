@@ -204,14 +204,14 @@ func read(le func(string) (string, bool), prefix string, holder any) error {
 			return fmt.Errorf("envconfig: %q failed to populate: %w", field.Name, err)
 		}
 
-		if validator, ok := reflect.TypeAssert[Validator](fieldVal); ok {
+		if validator, ok := fieldVal.Interface().(Validator); ok {
 			if err := validator.Validate(); err != nil {
 				return fmt.Errorf("envconfig: %q failed to validate: %w", field.Name, err)
 			}
 		}
 	}
 
-	if validator, ok := reflect.TypeAssert[Validator](holderPtr); ok {
+	if validator, ok := holderPtr.Interface().(Validator); ok {
 		if err := validator.Validate(); err != nil {
 			return fmt.Errorf("envconfig: failed to validate: %w", err)
 		}
