@@ -1,4 +1,5 @@
 # envconfig
+![Coverage](https://img.shields.io/badge/Coverage-87.6%25-brightgreen)
 A small,
 dependency-free Go library for loading configuration from environment variables directly into your structs.
 
