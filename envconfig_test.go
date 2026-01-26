@@ -22,17 +22,21 @@ func TestReadValues(t *testing.T) {
 		case "N", "R", "S":
 			return "true", true
 		case "O", "P":
-			return "hello,world", true
+			return "hello, world", true
 		case "Q":
-			return "key1=value1,key2=value2", true
+			return "key1=value1, key2=value2", true
 		case "Z":
 			return "embedded_value", true
 		case "EMB_ZA":
 			return "emb_value", true
 		case "CUSTOM":
 			return "custom", true
+		case "CUSTOM_TEXT":
+			return "custom_text", true
 		case "CUSTOM_BINARY":
-			return "custom2", true
+			return "custom_binary", true
+		case "CUSTOM_JSON":
+			return "custom_json", true
 		case "DURATION":
 			return "1h", true
 		case "SDUR":
@@ -81,13 +85,13 @@ func TestReadValues(t *testing.T) {
 		PtrPtrBool:    ptr(ptr(true)),
 		StringDefault: "Default Value",
 		CustomTextUnmarshaler: CustomTextUnmarshaler{
-			Value: "***custom***",
+			Value: "***custom_text***",
 		},
 		CustomBinaryUnmarshaler: CustomBinaryUnmarshaler{
-			Value: "***custom2***",
+			Value: "***custom_binary2***",
 		},
 		CustomJSONUnmarshaler: CustomJSONUnmarshaler{
-			Value: "***custom3***",
+			Value: "***custom_json3***",
 		},
 		CustomTextUnmarshaler2: CustomTextUnmarshaler{
 			Value: "***custom***",
@@ -296,9 +300,9 @@ type Config struct {
 	StringDefault string `env:"MISSING" envDefault:"Default Value"`
 	MissingValue  string `env:"MISSING"`
 
-	CustomTextUnmarshaler   CustomTextUnmarshaler   `envPrefix:"CUSTOM"`
-	CustomBinaryUnmarshaler CustomBinaryUnmarshaler `envPrefix:"CUSTOM"`
-	CustomJSONUnmarshaler   CustomJSONUnmarshaler   `envPrefix:"CUSTOM"`
+	CustomTextUnmarshaler   CustomTextUnmarshaler   `env:"CUSTOM_TEXT"`
+	CustomBinaryUnmarshaler CustomBinaryUnmarshaler `env:"CUSTOM_BINARY"`
+	CustomJSONUnmarshaler   CustomJSONUnmarshaler   `env:"CUSTOM_JSON"`
 
 	CustomTextUnmarshaler2   CustomTextUnmarshaler    `env:"CUSTOM"`
 	CustomBinaryUnmarshaler2 CustomBinaryUnmarshaler  `env:"CUSTOM"`
@@ -477,4 +481,125 @@ func TestValidation(t *testing.T) {
 	if err == nil {
 		t.Errorf("Expected error")
 	}
+}
+
+// Credential represents a single user credential
+type Credential struct {
+	User string `env:"USER"`
+	Pass string `env:"PASS"`
+}
+
+// Credentials is a list of credentials that implements EnvCollector
+type Credentials []Credential
+
+// CollectEnv implements the EnvCollector interface
+func (c *Credentials) CollectEnv(prefix string, env envconfig.EnvGetter) error {
+	// Read the list of IDs from the prefix key itself (e.g., CREDS=0,1,2,3)
+	var ids []string
+	if err := env.ReadValue(prefix, &ids); err != nil {
+		return err
+	}
+
+	for _, id := range ids {
+		var cred Credential
+		// Read each credential struct using the full tag support
+		if err := env.Read(prefix+"_"+id, &cred); err != nil {
+			return err
+		}
+		*c = append(*c, cred)
+	}
+	return nil
+}
+
+type ConfigWithCollector struct {
+	Credentials Credentials `envPrefix:"CREDS"`
+}
+
+func TestEnvCollector(t *testing.T) {
+	le := func(key string) (string, bool) {
+		switch key {
+		case "CREDS":
+			return "0,1,2,4", true
+
+		case "CREDS_0_USER":
+			return "user0", true
+		case "CREDS_0_PASS":
+			return "pass0", true
+
+		case "CREDS_1_USER":
+			return "user1", true
+		case "CREDS_1_PASS":
+			return "pass1", true
+
+		case "CREDS_2_USER":
+			return "user2", true
+		case "CREDS_2_PASS":
+			return "pass2", true
+
+		case "CREDS_4_USER":
+			return "user4", true
+		case "CREDS_4_PASS":
+			return "pass4", true
+		}
+		return "", false
+	}
+
+	var cfg ConfigWithCollector
+	err := envconfig.Read(&cfg, le)
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+
+	if len(cfg.Credentials) != 4 {
+		t.Errorf("Expected 4 credentials, got %d", len(cfg.Credentials))
+	}
+
+	expected := []Credential{
+		{User: "user0", Pass: "pass0"},
+		{User: "user1", Pass: "pass1"},
+		{User: "user2", Pass: "pass2"},
+		{User: "user4", Pass: "pass4"},
+	}
+
+	for i, cred := range cfg.Credentials {
+		if cred.User != expected[i].User || cred.Pass != expected[i].Pass {
+			t.Errorf("Credential %d: expected %+v, got %+v", i, expected[i], cred)
+		}
+	}
+}
+
+func TestEnvCollectorErrors(t *testing.T) {
+	le := func(key string) (string, bool) {
+		return "", false
+	}
+
+	t.Run("collector_with_env_tag", func(t *testing.T) {
+		var cfg struct {
+			Creds Credentials `env:"CREDS"`
+		}
+		err := envconfig.Read(&cfg, le)
+		if err.Error() != `envconfig: "Creds" implements EnvCollector, use "envPrefix" instead of env` {
+			t.Error("expected error for collector with env tag")
+		}
+	})
+
+	t.Run("collector_without_tag", func(t *testing.T) {
+		var cfg struct {
+			Creds Credentials
+		}
+		err := envconfig.Read(&cfg, le)
+		if err.Error() != "envconfig: field \"Creds\" does not have \"env\" or \"envPrefix\" tags. Ignore it explicitly with `env:\"-\"` or embed to treat it flat" {
+			t.Error("expected error for collector without tag")
+		}
+	})
+
+	t.Run("collector_with_empty_prefix", func(t *testing.T) {
+		var cfg struct {
+			Creds Credentials `envPrefix:""`
+		}
+		err := envconfig.Read(&cfg, le)
+		if err.Error() != `envconfig: "Creds" implements EnvCollector with empty "envPrefix"` {
+			t.Error("expected error for collector with empty prefix")
+		}
+	})
 }

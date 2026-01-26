@@ -11,6 +11,8 @@ import (
 	"time"
 )
 
+type LookupEnv = func(string) (string, bool)
+
 // Read populates holder (a pointer to struct) using the provided lookup function to resolve values.
 //
 // Usage:
@@ -52,18 +54,6 @@ import (
 //   - Named struct fields may also carry `envPrefix:"PFX"`; they must NOT
 //     also have an `env` tag.
 //
-// Whole-struct (single-key) decoding:
-//
-//	If a struct-typed field (or embedded struct) has an effective prefix PFX_,
-//	and the holder type implements one of the standard decoders below, a single
-//	env variable named "PFX" (without the trailing underscore) can be used to
-//	populate the entire struct at once. When present, this whole-struct value
-//	takes precedence and field-by-field decoding is skipped.
-//	Supported decoders:
-//	  - encoding.TextUnmarshaler
-//	  - encoding.BinaryUnmarshaler
-//	  - json.Unmarshaler
-//
 // Supported field types:
 //   - primitives: string, bool, all int/uint sizes, float32/64
 //   - time.Duration (parsed via time.ParseDuration)
@@ -96,7 +86,7 @@ import (
 //	considered "set": it suppresses `envDefault` and does not trigger
 //	`envRequired`. If you want defaulting on empty strings, use IgnoreEmptyEnvLookup,
 //	which wraps os.LookupEnv and treats empty values as unset (returns ok == false when value == "").
-func Read[T any](holder *T, lookupEnv ...func(string) (string, bool)) error {
+func Read[T any](holder *T, lookupEnv ...LookupEnv) error {
 	lookupEnvFunc := os.LookupEnv
 	if len(lookupEnv) >= 1 {
 		lookupEnvFunc = lookupEnv[0]
@@ -119,13 +109,60 @@ type Validator interface {
 	Validate() error
 }
 
-func read(le func(string) (string, bool), prefix string, holder any) error {
-	if len(prefix) > 0 {
-		if err, ok := tryUnmarshalKnownInterface(le, prefix, holder); ok {
-			return fmt.Errorf("envconfig: %q prefix failed to populate: %w", prefix, err)
-		}
+// EnvGetter provides a convenient way to get values from env variables.
+// It is passed to EnvCollector.CollectEnv to allow a custom env collection.
+// Under the hood it uses the provided Lookup in Read function.
+type EnvGetter interface {
+	// Lookup performs a raw lookup for an environment variable.
+	Lookup(key string) (string, bool)
+
+	// ReadValue parses a single environment variable into target.
+	// Target must be a pointer.
+	ReadValue(key string, target any) error
+
+	// Read populates target struct with the given prefix.
+	Read(prefix string, target any) error
+}
+
+type getter struct {
+	lookup LookupEnv
+}
+
+func (g *getter) Lookup(key string) (string, bool) {
+	return g.lookup(key)
+}
+
+func (g *getter) ReadValue(key string, target any) error {
+	v := reflect.ValueOf(target)
+	if v.Kind() != reflect.Ptr {
+		return fmt.Errorf("%q not a pointer", v.Type())
 	}
 
+	val, ok := g.lookup(key)
+	if !ok {
+		return nil
+	}
+
+	return setValue(v, val)
+}
+
+func (g *getter) Read(prefix string, target any) error {
+	return read(g.lookup, prefix+"_", target)
+}
+
+// EnvCollector is an advanced interface for collecting custom environment variables
+// that can't be easily expressed via struct tags.
+// For example, a custom collector can handle environment variables with complex
+// naming conventions like USER_1, PASS_1, USER_2, PASS_2.
+//
+// Fields implementing EnvCollector MUST have the `envPrefix` tag (not `env`).
+// See TestEnvCollector for a concrete example.
+type EnvCollector interface {
+	// CollectEnv is called with the computed prefix and an EnvGetter for reading env values.
+	CollectEnv(prefix string, env EnvGetter) error
+}
+
+func read(le func(string) (string, bool), prefix string, holder any) error {
 	holderPtr := reflect.ValueOf(holder)
 	holderValue := holderPtr.Elem()
 	fields := reflect.VisibleFields(holderValue.Type())
@@ -153,6 +190,23 @@ func read(le func(string) (string, bool), prefix string, holder any) error {
 			}
 			ft = ft.Elem()
 			fieldVal = fieldVal.Elem()
+		}
+
+		if field.PkgPath == "" && fieldVal.CanAddr() {
+			if collector, ok := fieldVal.Addr().Interface().(EnvCollector); ok {
+				if hasEnv {
+					return fmt.Errorf("envconfig: %q implements EnvCollector, use \"envPrefix\" instead of env", field.Name)
+				}
+				if pref == "" {
+					return fmt.Errorf("envconfig: %q implements EnvCollector with empty \"envPrefix\"", field.Name)
+				}
+
+				get := &getter{lookup: le}
+				if err := collector.CollectEnv(prefix+pref, get); err != nil {
+					return fmt.Errorf("envconfig: %q CollectEnv failed: %w", field.Name, err)
+				}
+				continue
+			}
 		}
 
 		if field.Anonymous {
@@ -218,40 +272,6 @@ func read(le func(string) (string, bool), prefix string, holder any) error {
 	}
 
 	return nil
-}
-
-func tryUnmarshalKnownInterface(le func(string) (string, bool), prefix string, holder any) (error, bool) {
-	if i, ok := holder.(encoding.TextUnmarshaler); ok {
-		envValue, ok := le(prefix[:len(prefix)-1])
-		if !ok {
-			return nil, true
-		}
-
-		if err := i.UnmarshalText([]byte(envValue)); err != nil {
-			return err, true
-		}
-	}
-	if i, ok := holder.(encoding.BinaryUnmarshaler); ok {
-		envValue, ok := le(prefix[:len(prefix)-1])
-		if !ok {
-			return nil, true
-		}
-
-		if err := i.UnmarshalBinary([]byte(envValue)); err != nil {
-			return err, true
-		}
-	}
-	if i, ok := holder.(json.Unmarshaler); ok {
-		envValue, ok := le(prefix[:len(prefix)-1])
-		if !ok {
-			return nil, true
-		}
-
-		if err := i.UnmarshalJSON([]byte(envValue)); err != nil {
-			return err, true
-		}
-	}
-	return nil, false
 }
 
 var durationType = reflect.TypeOf(time.Duration(0))
