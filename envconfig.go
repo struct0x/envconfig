@@ -105,10 +105,6 @@ func Read[T any](holder *T, lookupEnv ...LookupEnv) error {
 	return read(lookupEnvFunc, "", holder)
 }
 
-type Validator interface {
-	Validate() error
-}
-
 // EnvGetter provides a convenient way to get values from env variables.
 // It is passed to EnvCollector.CollectEnv to allow a custom env collection.
 // Under the hood it uses the provided Lookup in Read function.
@@ -255,19 +251,7 @@ func read(le func(string) (string, bool), prefix string, holder any) error {
 		}
 
 		if err := setValue(fieldVal, envVal); err != nil {
-			return fmt.Errorf("envconfig: %q failed to populate: %w", field.Name, err)
-		}
-
-		if validator, ok := fieldVal.Interface().(Validator); ok {
-			if err := validator.Validate(); err != nil {
-				return fmt.Errorf("envconfig: %q failed to validate: %w", field.Name, err)
-			}
-		}
-	}
-
-	if validator, ok := holderPtr.Interface().(Validator); ok {
-		if err := validator.Validate(); err != nil {
-			return fmt.Errorf("envconfig: failed to validate: %w", err)
+			return fmt.Errorf("envconfig: field %q failed to populate: %w", field.Name, err)
 		}
 	}
 

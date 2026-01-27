@@ -13,7 +13,7 @@ import (
 // Comments starting with # are ignored.
 // Empty lines are ignored.
 // Notes:
-//   - If both the .env file and OS environment define a key, the OS environment value wins (current behavior).
+//   - If both the .env file and OS environment define a key, the OS environment value wins.
 //   - Lines like `export KEY=VALUE` are supported.
 func EnvFileLookup(filePath string) func(string) (string, bool) {
 	envMap := make(map[string]string)

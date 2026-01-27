@@ -1,7 +1,9 @@
 package envconfig_test
 
 import (
+	"net/url"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -47,6 +49,8 @@ func TestReadValues(t *testing.T) {
 			return "sub", true
 		case "SUB_SUB2_FF":
 			return "aaa", true
+		case "URL":
+			return "file:///etc/passwd", true
 		}
 
 		return "", false
@@ -57,6 +61,8 @@ func TestReadValues(t *testing.T) {
 	if err := envconfig.Read(&cfg, le); err != nil {
 		t.Error(err)
 	}
+
+	uri, _ := url.Parse("file:///etc/passwd")
 
 	want := Config{
 		NotPopulated: "",
@@ -113,10 +119,11 @@ func TestReadValues(t *testing.T) {
 			"key2": 2 * time.Hour,
 			"key3": 3 * time.Hour,
 		},
+		URL: uri,
 	}
 
 	if diff := reflect.DeepEqual(cfg, want); !diff {
-		t.Error("expected equal")
+		t.Errorf("expected equal:\n %v", want)
 	}
 }
 
@@ -310,6 +317,8 @@ type Config struct {
 	Duration                 time.Duration            `env:"DURATION"`
 	SliceDuration            []time.Duration          `env:"SDUR"`
 	MapDuration              map[string]time.Duration `env:"MDUR"`
+
+	URL *url.URL `env:"URL"`
 }
 
 type SubConfig struct {
@@ -460,29 +469,6 @@ func TestEmptySlice(t *testing.T) {
 	}
 }
 
-type ConfigWithValidation struct {
-	Value string `env:"VALUE"`
-}
-
-func (c *ConfigWithValidation) Validate() error {
-	return envconfig.Assert(
-		envconfig.Custom(c.Value != "invalid", "VALUE", "invalid value"),
-	)
-}
-
-func TestValidation(t *testing.T) {
-	le := func(key string) (string, bool) {
-		return "invalid", true
-	}
-
-	var cfg ConfigWithValidation
-
-	err := envconfig.Read(&cfg, le)
-	if err == nil {
-		t.Errorf("Expected error")
-	}
-}
-
 // Credential represents a single user credential
 type Credential struct {
 	User string `env:"USER"`
@@ -565,6 +551,176 @@ func TestEnvCollector(t *testing.T) {
 		if cred.User != expected[i].User || cred.Pass != expected[i].Pass {
 			t.Errorf("Credential %d: expected %+v, got %+v", i, expected[i], cred)
 		}
+	}
+}
+
+func TestSetValueErrors(t *testing.T) {
+	tests := []struct {
+		name    string
+		sut     func(le envconfig.LookupEnv) error
+		envVal  string
+		wantErr string
+	}{
+		{
+			name: "invalid_bool",
+			sut: func(le envconfig.LookupEnv) error {
+				return envconfig.Read(&struct {
+					V bool `env:"V"`
+				}{}, le)
+			},
+			envVal:  "notabool",
+			wantErr: "invalid syntax",
+		},
+		{
+			name: "invalid_int",
+			sut: func(le envconfig.LookupEnv) error {
+				return envconfig.Read(&struct {
+					V int `env:"V"`
+				}{}, le)
+			},
+			envVal:  "notanint",
+			wantErr: "invalid syntax",
+		},
+		{
+			name: "int_overflow",
+			sut: func(le envconfig.LookupEnv) error {
+				return envconfig.Read(&struct {
+					V int8 `env:"V"`
+				}{}, le)
+			},
+			envVal:  "999",
+			wantErr: "out of range",
+		},
+		{
+			name: "invalid_uint",
+			sut: func(le envconfig.LookupEnv) error {
+				return envconfig.Read(&struct {
+					V uint `env:"V"`
+				}{}, le)
+			},
+			envVal:  "notauint",
+			wantErr: "invalid syntax",
+		},
+		{
+			name: "uint_negative",
+			sut: func(le envconfig.LookupEnv) error {
+				return envconfig.Read(&struct {
+					V uint `env:"V"`
+				}{}, le)
+			},
+			envVal:  "-1",
+			wantErr: "invalid syntax",
+		},
+		{
+			name: "invalid_float",
+			sut: func(le envconfig.LookupEnv) error {
+				return envconfig.Read(&struct {
+					V float64 `env:"V"`
+				}{}, le)
+			},
+			envVal:  "notafloat",
+			wantErr: "invalid syntax",
+		},
+		{
+			name: "invalid_duration",
+			sut: func(le envconfig.LookupEnv) error {
+				return envconfig.Read(&struct {
+					V time.Duration `env:"V"`
+				}{}, le)
+			},
+			envVal:  "notaduration",
+			wantErr: "invalid duration",
+		},
+		{
+			name: "array_too_short",
+			sut: func(le envconfig.LookupEnv) error {
+				return envconfig.Read(&struct {
+					V [3]string `env:"V"`
+				}{}, le)
+			},
+			envVal:  "a,b",
+			wantErr: "array needs 3 elements, got 2",
+		},
+		{
+			name: "array_invalid_element",
+			sut: func(le envconfig.LookupEnv) error {
+				return envconfig.Read(&struct {
+					V [3]int `env:"V"`
+				}{}, le)
+			},
+			envVal:  "1,notint,3",
+			wantErr: "invalid syntax",
+		},
+		{
+			name: "map_invalid_format",
+			sut: func(le envconfig.LookupEnv) error {
+				return envconfig.Read(&struct {
+					V map[string]string `env:"V"`
+				}{}, le)
+			},
+			envVal:  "keyonly",
+			wantErr: "invalid map value",
+		},
+		{
+			name: "map_invalid_value",
+			sut: func(le envconfig.LookupEnv) error {
+				return envconfig.Read(&struct {
+					V map[string]int `env:"V"`
+				}{}, le)
+			},
+			envVal:  "key=notint",
+			wantErr: "invalid syntax",
+		},
+		{
+			name: "map_invalid_key",
+			sut: func(le envconfig.LookupEnv) error {
+				return envconfig.Read(&struct {
+					V map[int]int `env:"V"`
+				}{}, le)
+			},
+			envVal:  "key=12",
+			wantErr: "invalid syntax",
+		},
+		{
+			name: "slice_invalid_element",
+			sut: func(le envconfig.LookupEnv) error {
+				return envconfig.Read(&struct {
+					V []int `env:"V"`
+				}{}, le)
+			},
+			envVal:  "1,2,notint",
+			wantErr: "invalid syntax",
+		},
+		{
+			name: "unsupported_type",
+			sut: func(le envconfig.LookupEnv) error {
+				return envconfig.Read(&struct {
+					V chan int `env:"V"`
+				}{}, le)
+			},
+			envVal:  "anything",
+			wantErr: "unsupported type",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			le := func(key string) (string, bool) {
+				if key == "V" {
+					return tt.envVal, true
+				}
+				return "", false
+			}
+
+			err := tt.sut(le)
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			t.Log(err)
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("expected error containing %q, got %q", tt.wantErr, err.Error())
+			}
+		})
 	}
 }
 
