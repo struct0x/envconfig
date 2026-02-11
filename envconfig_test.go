@@ -759,3 +759,51 @@ func TestEnvCollectorErrors(t *testing.T) {
 		}
 	})
 }
+
+// badCollectorNonPointer tests EnvGetter.Read with non-pointer target
+type badCollectorNonPointer struct{}
+
+func (b *badCollectorNonPointer) CollectEnv(prefix string, env envconfig.EnvGetter) error {
+	var target struct{ Name string }
+	return env.Read(prefix, target) // non-pointer - should error
+}
+
+// badCollectorNonStruct tests EnvGetter.Read with pointer to non-struct
+type badCollectorNonStruct struct{}
+
+func (b *badCollectorNonStruct) CollectEnv(prefix string, env envconfig.EnvGetter) error {
+	var target string
+	return env.Read(prefix, &target) // pointer to string - should error
+}
+
+func TestEnvGetterReadValidation(t *testing.T) {
+	le := func(key string) (string, bool) {
+		return "", false
+	}
+
+	t.Run("non_pointer_target", func(t *testing.T) {
+		var cfg struct {
+			Bad badCollectorNonPointer `envPrefix:"BAD"`
+		}
+		err := envconfig.Read(&cfg, le)
+		if err == nil {
+			t.Fatal("expected error for non-pointer target")
+		}
+		if !strings.Contains(err.Error(), "must be a pointer") {
+			t.Errorf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("non_struct_target", func(t *testing.T) {
+		var cfg struct {
+			Bad badCollectorNonStruct `envPrefix:"BAD"`
+		}
+		err := envconfig.Read(&cfg, le)
+		if err == nil {
+			t.Fatal("expected error for non-struct target")
+		}
+		if !strings.Contains(err.Error(), "pointer to struct") {
+			t.Errorf("unexpected error: %v", err)
+		}
+	})
+}

@@ -143,6 +143,13 @@ func (g *getter) ReadValue(key string, target any) error {
 }
 
 func (g *getter) Read(prefix string, target any) error {
+	tp := reflect.TypeOf(target)
+	if tp.Kind() != reflect.Ptr {
+		return fmt.Errorf("envconfig: Read target must be a pointer, got %q", tp.Kind())
+	}
+	if tp.Elem().Kind() != reflect.Struct {
+		return fmt.Errorf("envconfig: Read target must be a pointer to struct, got pointer to %q", tp.Elem().Kind())
+	}
 	return read(g.lookup, prefix+"_", target)
 }
 
@@ -306,7 +313,7 @@ func setValue(inp reflect.Value, value string) error {
 			return err
 		}
 		inp.SetInt(i)
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 		bits := inp.Type().Bits()
 		u, err := strconv.ParseUint(value, 10, bits)
 		if err != nil {
