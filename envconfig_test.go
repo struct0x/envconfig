@@ -29,6 +29,8 @@ func TestReadValues(t *testing.T) {
 			return "key1=value1, key2=value2", true
 		case "Z":
 			return "embedded_value", true
+		case "T":
+			return "bytes", true
 		case "EMB_ZA":
 			return "emb_value", true
 		case "CUSTOM":
@@ -90,6 +92,7 @@ func TestReadValues(t *testing.T) {
 		PtrBool:       ptr(true),
 		PtrPtrBool:    ptr(ptr(true)),
 		StringDefault: "Default Value",
+		Bytes:         []byte("bytes"),
 		CustomTextUnmarshaler: CustomTextUnmarshaler{
 			Value: "***custom_text***",
 		},
@@ -303,6 +306,7 @@ type Config struct {
 	Map         map[string]string `env:"Q"`
 	PtrBool     *bool             `env:"R"`
 	PtrPtrBool  **bool            `env:"S"`
+	Bytes       []byte            `env:"T"`
 
 	StringDefault string `env:"MISSING" envDefault:"Default Value"`
 	MissingValue  string `env:"MISSING"`

@@ -265,7 +265,10 @@ func read(le func(string) (string, bool), prefix string, holder any) error {
 	return nil
 }
 
-var durationType = reflect.TypeOf(time.Duration(0))
+var (
+	durationType  = reflect.TypeOf(time.Duration(0))
+	byteSliceType = reflect.TypeOf([]byte{})
+)
 
 func setValue(inp reflect.Value, value string) error {
 	if inp.Kind() == reflect.Ptr {
@@ -294,6 +297,10 @@ func setValue(inp reflect.Value, value string) error {
 			return err
 		}
 		inp.Set(reflect.ValueOf(d))
+		return nil
+
+	case byteSliceType:
+		inp.Set(reflect.ValueOf([]byte(value)))
 		return nil
 	}
 
