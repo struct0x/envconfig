@@ -102,7 +102,7 @@ Notes:
 
 Add struct field tags to control how values are loaded:
 
-- `env`: the env variable name. Use `env:"-"` to skip a field.
+- `env`: the env variable name. Use `env:"-"` to skip a field. 
 - `envDefault`: fallback value if the variable is not set.
 - `envRequired:"true"`: marks the field as required, returns error when not set, and no default provided.
 - `envPrefix`: for struct-typed fields; prepends a prefix (with underscore) for all nested fields under that struct.
@@ -126,7 +126,7 @@ import (
 )
 
 type Config struct {
-	Credentials Credentials `envPrefix:"CREDS"`
+	Credentials Credentials
 }
 
 type Credentials []Credential
@@ -136,17 +136,17 @@ type Credential struct {
 	Pass string `env:"PASS"`
 }
 
-func (c *Credentials) CollectEnv(prefix string, env envconfig.EnvGetter) error {
+func (c *Credentials) CollectEnv(env envconfig.EnvGetter) error {
 	// Read IDs from CREDS=0,1,2 
 	var ids []string
-	if err := env.ReadValue(prefix, &ids); err != nil {
+	if err := env.ReadValue("CREDS", &ids); err != nil {
 		return err
 	}
 
 	for _, id := range ids {
 		var cred Credential
 		// Reads CREDS_0_USER, CREDS_0_PASS, etc.                                                                                                                                                                                                                                                                                                                                                                              
-		if err := env.Read(prefix+"_"+id, &cred); err != nil {
+		if err := env.ReadIntoStruct("CREDS_"+id, &cred); err != nil {
 			return err
 		}
 		*c = append(*c, cred)
@@ -156,11 +156,11 @@ func (c *Credentials) CollectEnv(prefix string, env envconfig.EnvGetter) error {
 
 ```
 
-Fields implementing EnvCollector must use envPrefix (not env). 
+Tags are ignored when implementing EnvCollector. 
 The EnvGetter provides three methods: 
 - Lookup for raw access, 
 - ReadValue for parsing single values, and 
-- Read for populating nested structs with full tag support.
+- ReadIntoStruct for populating nested structs with full tag support.
 
 
 ### Examples
@@ -206,6 +206,7 @@ type T struct {
 ## Supported types
 
 - string, bool
+- []byte - (read as []byte("bytes"), not []byte{'b','y','t','e','s'})
 - Integers: int, int8, int16, int32, int64
 - Unsigned integers: uint, uint8, uint16, uint32, uint64
 - Floats: float32, float64
@@ -213,10 +214,8 @@ type T struct {
 - Arrays and slices (comma-separated values): "a,b,c"
 - Maps (comma-separated key=value pairs): "k1=v1,k2=v2"
 - Pointers to supported types (allocated when needed)
-- Custom types implementing any of:
-    - encoding.TextUnmarshaler
-    - encoding.BinaryUnmarshaler
-    - json.Unmarshaler
+- Custom types implementing in the following priority:
+    - json.Unmarshaler > BinaryUnmarshaler > TextUnmarshaler
 
 If a value cannot be parsed into the target type, `Read` returns a descriptive error.
 
@@ -265,18 +264,28 @@ func main() {
   var c C
   _ = envconfig.Read(&c, sm.Lookup)
 }
-
 ```
-
 Error handling is your responsibility, use `envRequired` to ensure values are present regardless of lookup failures.
+
+### Additional lookup functions
+
+`IgnoreEmptyEnvLookup` treats empty env vars as unset. 
+
 
 ## Error handling
 
 `Read` returns an error when:
 
-- The holder is not a non-nil pointer to a struct
+- `env` tag is empty
+- Struct with `env` tag but no unmarshal interface
+- Exported values without `env` tag
+- EnvCollector with value (non-pointer) receiver
 - A required field is missing and no default is provided
-- A value cannot be parsed into the target type
+- holder is nil or not a pointer to a struct
+- Struct fields specify both `env` and `envPrefix`
+- `envPrefix` is empty when present
+- Parsing/conversion failures (returned errors includes the env key)
+- Unsupported leaf types (that do not implement a supported unmarshal interface)
 
 Errors include the env variable name and context to aid debugging.
 

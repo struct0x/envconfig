@@ -128,11 +128,16 @@ func TestReadValues(t *testing.T) {
 	if diff := reflect.DeepEqual(cfg, want); !diff {
 		t.Errorf("expected equal:\n %v", want)
 	}
+
+	t.Log(cfg)
+	t.Log(want)
 }
 
 func TestReadAdvanced(t *testing.T) {
 	le := func(key string) (string, bool) {
 		switch key {
+		case "ENV":
+			return "ENV", true
 		case "AA":
 			return "AA", true
 		case "SUB2_FF":
@@ -150,6 +155,7 @@ func TestReadAdvanced(t *testing.T) {
 	t.Run("embedded_struct", func(t *testing.T) {
 		var cfg struct {
 			SubConfig
+			Sub2 SubConfig
 		}
 		if err := envconfig.Read(&cfg, le); err != nil {
 			t.Error(err)
@@ -157,8 +163,16 @@ func TestReadAdvanced(t *testing.T) {
 
 		want := struct {
 			SubConfig
+			Sub2 SubConfig
 		}{
 			SubConfig: SubConfig{
+				A: "AA",
+				SubSub: SubSubConfig{
+					A: "aaa",
+				},
+			},
+
+			Sub2: SubConfig{
 				A: "AA",
 				SubSub: SubSubConfig{
 					A: "aaa",
@@ -171,31 +185,20 @@ func TestReadAdvanced(t *testing.T) {
 		}
 	})
 
-	t.Run("struct_without_env", func(t *testing.T) {
-		var cfg struct {
-			Name SubConfig
-		}
-		if err := envconfig.Read(&cfg, le); err == nil {
-			t.Error(err)
-		}
-	})
-
 	t.Run("struct_with_empty_env", func(t *testing.T) {
 		var cfg struct {
 			Name SubConfig `env:""`
 		}
-		if err := envconfig.Read(&cfg, le); err == nil {
-			t.Error(err)
-		}
+		err := envconfig.Read(&cfg, le)
+		assertErr(t, err, `envconfig: tag "env" can't be empty: "Name"`)
 	})
 
 	t.Run("embedded_struct_with_env", func(t *testing.T) {
 		var cfg struct {
 			SubConfig `env:"ENV"`
 		}
-		if err := envconfig.Read(&cfg, le); err == nil {
-			t.Error("want error")
-		}
+		err := envconfig.Read(&cfg, le)
+		assertErr(t, err, `envconfig: field "SubConfig" is a struct with "env" tag but does not implement encoding.TextUnmarshaler / encoding.BinaryUnmarshaler / json.Unmarshaler`)
 	})
 
 	t.Run("embedded_struct_with_prefix", func(t *testing.T) {
@@ -226,26 +229,23 @@ func TestReadAdvanced(t *testing.T) {
 		var cfg struct {
 			SubConfig `envPrefix:""`
 		}
-		if err := envconfig.Read(&cfg, le); err == nil {
-			t.Error("want error")
-		}
+		err := envconfig.Read(&cfg, le)
+		assertErr(t, err, `envconfig: tag "envPrefix" can't be empty: "SubConfig"`)
 	})
 
 	t.Run("struct_with_empty_prefix", func(t *testing.T) {
 		var cfg struct {
 			Name SubConfig `envPrefix:""`
 		}
-		if err := envconfig.Read(&cfg, le); err == nil {
-			t.Error("want error")
-		}
+		err := envconfig.Read(&cfg, le)
+		assertErr(t, err, `envconfig: tag "envPrefix" can't be empty: "Name"`)
 	})
 	t.Run("struct_with_both_env_and_prefix", func(t *testing.T) {
 		var cfg struct {
 			Name SubConfig `env:"AA" envPrefix:"BB"`
 		}
-		if err := envconfig.Read(&cfg, le); err == nil {
-			t.Error("want error")
-		}
+		err := envconfig.Read(&cfg, le)
+		assertErr(t, err, `envconfig: both "env"  and "envPrefix" does not make sense. If a field is a struct pick "envPrefix" if you want to populate it using composite env keys, use "env" if you implement encoding.TextUnmarshaler / encoding.BinaryUnmarshaler / json.Unmarshaler, or remove tags to treat is flat`)
 	})
 }
 
@@ -256,17 +256,39 @@ func TestInvalid(t *testing.T) {
 
 	var cfg struct {
 		Data struct {
-			String  string `env:"STRING"`
-			Int     int    `env:"INT"`
-			Bool    bool   `env:"BOOL"`
-			Default string `env:"DEFAULT" envDefault:"default"`
-		} `env:"KEY"`
+			Int int `env:"INT"`
+		}
 	}
 
 	err := envconfig.Read(&cfg, le)
 	if err == nil {
-		t.Error("expected error")
+		t.Fatal("expected error")
 	}
+	if err.Error() != `envconfig: field "Int" failed to populate: strconv.ParseInt: parsing "invalid": invalid syntax` {
+		t.Fatalf("Wrong error: %v", err)
+	}
+	t.Log(err)
+}
+
+func TestPrimitiveNoEnvTag(t *testing.T) {
+	le := func(key string) (string, bool) {
+		return "invalid", true
+	}
+
+	var cfg struct {
+		Data struct {
+			String string
+		}
+	}
+
+	err := envconfig.Read(&cfg, le)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if err.Error() != `envconfig: field "String" does not have "env" tag` {
+		t.Fatalf("Wrong error: %v", err)
+	}
+	t.Log(err)
 }
 
 func TestReadRequired(t *testing.T) {
@@ -402,8 +424,8 @@ func TestNestedStructPrefixHandling(t *testing.T) {
 	}
 
 	type Config struct {
-		Sub1 SubConfig `envPrefix:"APP1"`
-		Sub2 SubConfig `envPrefix:"APP2"`
+		Sub1      SubConfig `envPrefix:"APP1"`
+		SubConfig `envPrefix:"APP2"`
 	}
 
 	le := func(key string) (string, bool) {
@@ -422,8 +444,8 @@ func TestNestedStructPrefixHandling(t *testing.T) {
 		t.Errorf("Unexpected error: %v", err)
 	}
 
-	if cfg.Sub1.Port != 8080 || cfg.Sub2.Port != 9090 {
-		t.Errorf("Incorrect port values: Sub1=%d, Sub2=%d", cfg.Sub1.Port, cfg.Sub2.Port)
+	if cfg.Sub1.Port != 8080 || cfg.Port != 9090 {
+		t.Errorf("Incorrect port values: Sub1=%d, Sub2=%d", cfg.Sub1.Port, cfg.Port)
 	}
 }
 
@@ -483,17 +505,17 @@ type Credential struct {
 type Credentials []Credential
 
 // CollectEnv implements the EnvCollector interface
-func (c *Credentials) CollectEnv(prefix string, env envconfig.EnvGetter) error {
+func (c *Credentials) CollectEnv(env envconfig.EnvGetter) error {
 	// Read the list of IDs from the prefix key itself (e.g., CREDS=0,1,2,3)
 	var ids []string
-	if err := env.ReadValue(prefix, &ids); err != nil {
+	if err := env.ReadValue("CREDS", &ids); err != nil {
 		return err
 	}
 
 	for _, id := range ids {
 		var cred Credential
 		// Read each credential struct using the full tag support
-		if err := env.Read(prefix+"_"+id, &cred); err != nil {
+		if err := env.ReadIntoStruct("CREDS_"+id, &cred); err != nil {
 			return err
 		}
 		*c = append(*c, cred)
@@ -502,7 +524,7 @@ func (c *Credentials) CollectEnv(prefix string, env envconfig.EnvGetter) error {
 }
 
 type ConfigWithCollector struct {
-	Credentials Credentials `envPrefix:"CREDS"`
+	Credentials Credentials
 }
 
 func TestEnvCollector(t *testing.T) {
@@ -728,56 +750,27 @@ func TestSetValueErrors(t *testing.T) {
 	}
 }
 
-func TestEnvCollectorErrors(t *testing.T) {
-	le := func(key string) (string, bool) {
-		return "", false
-	}
-
-	t.Run("collector_with_env_tag", func(t *testing.T) {
-		var cfg struct {
-			Creds Credentials `env:"CREDS"`
-		}
-		err := envconfig.Read(&cfg, le)
-		if err.Error() != `envconfig: "Creds" implements EnvCollector, use "envPrefix" instead of env` {
-			t.Error("expected error for collector with env tag")
-		}
-	})
-
-	t.Run("collector_without_tag", func(t *testing.T) {
-		var cfg struct {
-			Creds Credentials
-		}
-		err := envconfig.Read(&cfg, le)
-		if err.Error() != "envconfig: field \"Creds\" does not have \"env\" or \"envPrefix\" tags. Ignore it explicitly with `env:\"-\"` or embed to treat it flat" {
-			t.Error("expected error for collector without tag")
-		}
-	})
-
-	t.Run("collector_with_empty_prefix", func(t *testing.T) {
-		var cfg struct {
-			Creds Credentials `envPrefix:""`
-		}
-		err := envconfig.Read(&cfg, le)
-		if err.Error() != `envconfig: "Creds" implements EnvCollector with empty "envPrefix"` {
-			t.Error("expected error for collector with empty prefix")
-		}
-	})
-}
-
 // badCollectorNonPointer tests EnvGetter.Read with non-pointer target
 type badCollectorNonPointer struct{}
 
-func (b *badCollectorNonPointer) CollectEnv(prefix string, env envconfig.EnvGetter) error {
+func (b *badCollectorNonPointer) CollectEnv(env envconfig.EnvGetter) error {
 	var target struct{ Name string }
-	return env.Read(prefix, target) // non-pointer - should error
+	return env.ReadIntoStruct("", target) // non-pointer - should error
 }
 
-// badCollectorNonStruct tests EnvGetter.Read with pointer to non-struct
+// badCollectorNonPointer tests EnvGetter.Read with non-pointer target
+type badCollectorNotPointerReceiver struct{}
+
+func (b badCollectorNotPointerReceiver) CollectEnv(env envconfig.EnvGetter) error {
+	var target struct{ Name string }
+	return env.ReadIntoStruct("", target) // non-pointer - should error
+}
+
 type badCollectorNonStruct struct{}
 
-func (b *badCollectorNonStruct) CollectEnv(prefix string, env envconfig.EnvGetter) error {
+func (b *badCollectorNonStruct) CollectEnv(env envconfig.EnvGetter) error {
 	var target string
-	return env.Read(prefix, &target) // pointer to string - should error
+	return env.ReadIntoStruct("", &target)
 }
 
 func TestEnvGetterReadValidation(t *testing.T) {
@@ -785,29 +778,44 @@ func TestEnvGetterReadValidation(t *testing.T) {
 		return "", false
 	}
 
-	t.Run("non_pointer_target", func(t *testing.T) {
+	t.Run("non_pointer_receiver_target", func(t *testing.T) {
 		var cfg struct {
-			Bad badCollectorNonPointer `envPrefix:"BAD"`
+			Bad badCollectorNotPointerReceiver
 		}
 		err := envconfig.Read(&cfg, le)
-		if err == nil {
-			t.Fatal("expected error for non-pointer target")
+		assertErr(t, err, "envconfig: field \"Bad\" implements EnvCollector but not for a pointer receiver")
+	})
+
+	t.Run("non_pointer_target", func(t *testing.T) {
+		var cfg struct {
+			Bad badCollectorNonPointer
 		}
-		if !strings.Contains(err.Error(), "must be a pointer") {
-			t.Errorf("unexpected error: %v", err)
-		}
+		err := envconfig.Read(&cfg, le)
+		assertErr(t, err, "envconfig: \"Bad\" CollectEnv failed: envconfig: Read target must be a pointer, got \"struct\"")
 	})
 
 	t.Run("non_struct_target", func(t *testing.T) {
 		var cfg struct {
-			Bad badCollectorNonStruct `envPrefix:"BAD"`
+			Bad badCollectorNonStruct
 		}
 		err := envconfig.Read(&cfg, le)
-		if err == nil {
-			t.Fatal("expected error for non-struct target")
-		}
-		if !strings.Contains(err.Error(), "pointer to struct") {
-			t.Errorf("unexpected error: %v", err)
-		}
+		assertErr(t, err, "envconfig: \"Bad\" CollectEnv failed: envconfig: Read target must be a pointer to struct, got pointer to \"string\"")
 	})
+}
+
+func TestNilPointer(t *testing.T) {
+	err := envconfig.Read((*Config)(nil))
+
+	assertErr(t, err, "envconfig: nil holder")
+}
+
+func assertErr(t *testing.T, err error, exp string) {
+	t.Helper()
+	if err == nil {
+		t.Fatal("Expected error got nil")
+	}
+
+	if err.Error() != exp {
+		t.Fatalf("Expected %q got %q", exp, err.Error())
+	}
 }

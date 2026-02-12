@@ -47,12 +47,16 @@ type LookupEnv = func(string) (string, bool)
 //     leaf env names. Prefixes are joined with "_".
 //     Example: `envPrefix:"DB"` -> DB_HOST, DB_PORT.
 //
-// Embedded vs named struct fields:
-//   - Embedded (anonymous) struct fields are treated "flat" by default
-//     (no extra prefix). To prefix an embedded subtree, put `envPrefix` on
-//     the embedded field.
-//   - Named struct fields may also carry `envPrefix:"PFX"`; they must NOT
-//     also have an `env` tag.
+// Embedded and named struct fields:
+//   - Embedded (anonymous) and named struct fields are treated "flat" by default
+//     (no extra prefix). To prefix a subtree, put `envPrefix` on
+//     the field.
+//
+// Advanced use with EnvCollector:
+//
+//	EnvCollector is a special interface that can be implemented on a pointer receiver.
+//	When encountered, it will be called, moving env reading into the implementor.
+//	This is an advanced interface that helps to populate values that cannot be represented using struct tags.
 //
 // Supported field types:
 //   - primitives: string, bool, all int/uint sizes, float32/64
@@ -60,7 +64,7 @@ type LookupEnv = func(string) (string, bool)
 //   - arrays, slices: comma-separated values (e.g. "a,b,c")
 //   - maps: comma-separated k=v pairs (e.g. "k1=v1,k2=v2"); split on first "="
 //   - pointers to any supported type (allocated as needed)
-//   - any type implementing encoding.TextUnmarshaler / BinaryUnmarshaler / json.Unmarshaler
+//   - any type implementing (in the priority) json.Unmarshaler > encoding.BinaryUnmarshaler > encoding.TextUnmarshaler
 //
 // Precedence per leaf field:
 //  1. If lookupEnv returns (value, ok==true), that value is used as-is
@@ -69,24 +73,22 @@ type LookupEnv = func(string) (string, bool)
 //  3. Else, if `envRequired:"true"`, Read returns an error.
 //  4. Else, the field is left at its zero value.
 //
-// Validation & errors:
-//   - holder must be a non-nil pointer to a struct.
-//   - Non-embedded struct fields must have either `env` or `envPrefix`
-//     (or be explicitly skipped with `env:"-"`); otherwise an error is returned.
-//   - Struct fields must not specify both `env` and `envPrefix`.
-//   - `envPrefix` must not be empty when present.
-//   - Parsing/conversion failures return errors that include the env key.
-//   - Unsupported leaf types (that do not implement a supported unmarshal
-//     interface) cause an error.
-//   - any type can implement Validator interface, and it will be called as soon as value if populated.
-//
-// Note on empties:
-//
-//	An env var that is present but empty (lookup ok == true, value == "") is
-//	considered "set": it suppresses `envDefault` and does not trigger
-//	`envRequired`. If you want defaulting on empty strings, use IgnoreEmptyEnvLookup,
-//	which wraps os.LookupEnv and treats empty values as unset (returns ok == false when value == "").
+// Errors when:
+//   - `env` tag is empty
+//   - Struct with `env` tag but no unmarshal interface
+//   - Exported values without `env` tag
+//   - EnvCollector with value (non-pointer) receiver
+//   - A required field is missing and no default is provided
+//   - holder is nil or not a pointer to a struct
+//   - Struct fields specify both `env` and `envPrefix`
+//   - `envPrefix` is empty when present
+//   - Parsing/conversion failures (returned errors includes the env key)
+//   - Unsupported leaf types (that do not implement a supported unmarshal interface)
 func Read[T any](holder *T, lookupEnv ...LookupEnv) error {
+	if holder == nil {
+		return fmt.Errorf("envconfig: nil holder")
+	}
+
 	lookupEnvFunc := os.LookupEnv
 	if len(lookupEnv) >= 1 {
 		lookupEnvFunc = lookupEnv[0]
@@ -112,12 +114,13 @@ type EnvGetter interface {
 	// Lookup performs a raw lookup for an environment variable.
 	Lookup(key string) (string, bool)
 
-	// ReadValue parses a single environment variable into target.
+	// ReadValue parses a single environment variable into a target.
 	// Target must be a pointer.
 	ReadValue(key string, target any) error
 
-	// Read populates target struct with the given prefix.
-	Read(prefix string, target any) error
+	// ReadIntoStruct populates the target struct adding envPrefix + "_" for all `env` tags found on a struct.
+	// Target must be a pointer to a struct
+	ReadIntoStruct(envPrefix string, target any) error
 }
 
 type getter struct {
@@ -142,7 +145,7 @@ func (g *getter) ReadValue(key string, target any) error {
 	return setValue(v, val)
 }
 
-func (g *getter) Read(prefix string, target any) error {
+func (g *getter) ReadIntoStruct(prefix string, target any) error {
 	tp := reflect.TypeOf(target)
 	if tp.Kind() != reflect.Ptr {
 		return fmt.Errorf("envconfig: Read target must be a pointer, got %q", tp.Kind())
@@ -158,11 +161,10 @@ func (g *getter) Read(prefix string, target any) error {
 // For example, a custom collector can handle environment variables with complex
 // naming conventions like USER_1, PASS_1, USER_2, PASS_2.
 //
-// Fields implementing EnvCollector MUST have the `envPrefix` tag (not `env`).
 // See TestEnvCollector for a concrete example.
 type EnvCollector interface {
-	// CollectEnv is called with the computed prefix and an EnvGetter for reading env values.
-	CollectEnv(prefix string, env EnvGetter) error
+	// CollectEnv is called with an EnvGetter for reading env values.
+	CollectEnv(env EnvGetter) error
 }
 
 func read(le func(string) (string, bool), prefix string, holder any) error {
@@ -171,21 +173,11 @@ func read(le func(string) (string, bool), prefix string, holder any) error {
 	fields := reflect.VisibleFields(holderValue.Type())
 
 	for _, field := range fields {
-		env, hasEnv := field.Tag.Lookup("env")
-		pref, hasPrefix := field.Tag.Lookup("envPrefix")
-		if env == "-" {
+		if field.PkgPath != "" {
 			continue
-		}
-		if (hasEnv && env == "") && !hasPrefix {
-			return fmt.Errorf("envconfig: tag \"env\" can't be empty: %q", field.Name)
 		}
 
 		fieldVal := holderValue.FieldByName(field.Name)
-
-		if !hasEnv && !hasPrefix && !field.Anonymous && fieldVal.CanSet() {
-			return fmt.Errorf("envconfig: field %q does not have \"env\" or \"envPrefix\" tags. Ignore it explicitly with `env:\"-\"` or embed to treat it flat", field.Name)
-		}
-
 		ft := field.Type
 		if ft.Kind() == reflect.Ptr {
 			if fieldVal.IsNil() {
@@ -195,65 +187,94 @@ func read(le func(string) (string, bool), prefix string, holder any) error {
 			fieldVal = fieldVal.Elem()
 		}
 
-		if field.PkgPath == "" && fieldVal.CanAddr() {
-			if collector, ok := fieldVal.Addr().Interface().(EnvCollector); ok {
-				if hasEnv {
-					return fmt.Errorf("envconfig: %q implements EnvCollector, use \"envPrefix\" instead of env", field.Name)
-				}
-				if pref == "" {
-					return fmt.Errorf("envconfig: %q implements EnvCollector with empty \"envPrefix\"", field.Name)
-				}
+		if fieldVal.CanAddr() {
+			if fieldVal.Type().Implements(envCollectorType) {
+				return fmt.Errorf("envconfig: field %q implements EnvCollector but not for a pointer receiver", field.Name)
+			}
 
+			if collector, ok := fieldVal.Addr().Interface().(EnvCollector); ok {
 				get := &getter{lookup: le}
-				if err := collector.CollectEnv(prefix+pref, get); err != nil {
+				if err := collector.CollectEnv(get); err != nil {
 					return fmt.Errorf("envconfig: %q CollectEnv failed: %w", field.Name, err)
 				}
 				continue
 			}
 		}
 
-		if field.Anonymous {
-			if hasEnv {
-				return fmt.Errorf("envconfig: %q is embedded use \"envPrefix\" to add prefix or remove \"env\" to treat struct flat", field.Name)
-			}
-
-			prefix = ""
-			if hasPrefix && pref == "" {
-				return fmt.Errorf("envconfig: %q field with empty \"envPrefix\" tag", field.Name)
-			} else if pref != "" {
-				prefix = pref + "_"
-			}
-
-			err := read(le, prefix, fieldVal.Addr().Interface())
-			if err != nil {
-				return err
-			}
+		env, hasEnv := field.Tag.Lookup("env")
+		if env == "-" {
 			continue
 		}
+		if hasEnv && env == "" {
+			return fmt.Errorf("envconfig: tag \"env\" can't be empty: %q", field.Name)
+		}
 
-		if ft.Kind() == reflect.Struct && hasPrefix {
-			if pref == "" {
-				return fmt.Errorf("envconfig: %q field with empty \"envPrefix\" tag", field.Name)
-			}
-			if hasEnv {
-				return fmt.Errorf("envconfig: struct %q can't have both \"envPrefix\" and \"env\" tags", field.Name)
+		pref, hasPrefix := field.Tag.Lookup("envPrefix")
+		if hasEnv && hasPrefix {
+			return fmt.Errorf("envconfig: both \"env\"  and \"envPrefix\" does not make sense. If a field is a struct pick \"envPrefix\" if you want to populate it using composite env keys, use \"env\" if you implement encoding.TextUnmarshaler / encoding.BinaryUnmarshaler / json.Unmarshaler, or remove tags to treat is flat")
+		}
+		if hasPrefix && pref == "" {
+			return fmt.Errorf("envconfig: tag \"envPrefix\" can't be empty: %q", field.Name)
+		}
+
+		if ft.Kind() == reflect.Struct {
+			if !hasEnv && !hasPrefix {
+				if err := read(le, prefix, fieldVal.Addr().Interface()); err != nil {
+					return err
+				}
+
+				continue
 			}
 
-			err := read(le, prefix+pref+"_", fieldVal.Addr().Interface())
-			if err != nil {
-				return err
+			if hasPrefix {
+				realPref := pref + "_"
+				if prefix != "" {
+					realPref = prefix + realPref
+				}
+				if err := read(le, realPref, fieldVal.Addr().Interface()); err != nil {
+					return err
+				}
+
+				continue
 			}
-			continue
+		}
+
+		if !hasEnv {
+			return fmt.Errorf("envconfig: field %q does not have \"env\" tag", field.Name)
 		}
 
 		envVal, ok := le(prefix + env)
 		if !ok {
-			if defaultVal := field.Tag.Get("envDefault"); defaultVal != "" {
-				envVal = defaultVal
-			} else if field.Tag.Get("envRequired") == "true" {
+			defaultVal, hasDefault := field.Tag.Lookup("envDefault")
+			if !hasDefault && field.Tag.Get("envRequired") == "true" {
 				return fmt.Errorf("envconfig: required field %q is empty", prefix+env)
-			} else {
+			} else if !hasDefault {
 				continue
+			}
+
+			envVal = defaultVal
+		}
+
+		if fieldVal.CanAddr() {
+			var fn func(val []byte) error
+			if u, ok := fieldVal.Addr().Interface().(encoding.TextUnmarshaler); ok {
+				fn = u.UnmarshalText
+			}
+			if u, ok := fieldVal.Addr().Interface().(encoding.BinaryUnmarshaler); ok {
+				fn = u.UnmarshalBinary
+			}
+			if u, ok := fieldVal.Addr().Interface().(json.Unmarshaler); ok {
+				fn = u.UnmarshalJSON
+			}
+
+			if fn != nil {
+				if err := fn([]byte(envVal)); err != nil {
+					return fmt.Errorf("envconfig: error decoding %q field: %w", field.Name, err)
+				}
+				continue
+			}
+			if fieldVal.Kind() == reflect.Struct {
+				return fmt.Errorf("envconfig: field %q is a struct with \"env\" tag but does not implement encoding.TextUnmarshaler / encoding.BinaryUnmarshaler / json.Unmarshaler", field.Name)
 			}
 		}
 
@@ -266,8 +287,9 @@ func read(le func(string) (string, bool), prefix string, holder any) error {
 }
 
 var (
-	durationType  = reflect.TypeOf(time.Duration(0))
-	byteSliceType = reflect.TypeOf([]byte{})
+	durationType     = reflect.TypeOf(time.Duration(0))
+	byteSliceType    = reflect.TypeOf([]byte{})
+	envCollectorType = reflect.TypeOf((*EnvCollector)(nil)).Elem()
 )
 
 func setValue(inp reflect.Value, value string) error {
@@ -279,14 +301,14 @@ func setValue(inp reflect.Value, value string) error {
 	}
 
 	if inp.CanAddr() {
-		if u, ok := inp.Addr().Interface().(encoding.TextUnmarshaler); ok {
-			return u.UnmarshalText([]byte(value))
+		if u, ok := inp.Addr().Interface().(json.Unmarshaler); ok {
+			return u.UnmarshalJSON([]byte(value))
 		}
 		if u, ok := inp.Addr().Interface().(encoding.BinaryUnmarshaler); ok {
 			return u.UnmarshalBinary([]byte(value))
 		}
-		if u, ok := inp.Addr().Interface().(json.Unmarshaler); ok {
-			return u.UnmarshalJSON([]byte(value))
+		if u, ok := inp.Addr().Interface().(encoding.TextUnmarshaler); ok {
+			return u.UnmarshalText([]byte(value))
 		}
 	}
 
