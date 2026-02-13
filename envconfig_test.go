@@ -120,7 +120,8 @@ func TestReadValues(t *testing.T) {
 		CustomJSONUnmarshaler2: CustomJSONUnmarshaler{
 			Value: "***custom3***",
 		},
-		Duration: time.Hour,
+		CustomString: "***custom_text***",
+		Duration:     time.Hour,
 		SliceDuration: []time.Duration{
 			time.Hour,
 			2 * time.Hour,
@@ -318,26 +319,27 @@ type Config struct {
 	NotPopulated string `env:"-"`
 	unexported   string
 
-	String       string            `env:"A"`
-	Int          int               `env:"B"`
-	Int8         int8              `env:"C"`
-	Int16        int16             `env:"D"`
-	Int32        int32             `env:"E"`
-	Int64        int64             `env:"F"`
-	Uint         uint              `env:"G"`
-	Uint8        uint8             `env:"H"`
-	Uint16       uint16            `env:"I"`
-	Uint32       uint32            `env:"J"`
-	Uint64       uint64            `env:"K"`
-	Float32      float32           `env:"L"`
-	Float64      float64           `env:"M"`
-	Bool         bool              `env:"N"`
-	ArrString    [2]string         `env:"O"`
-	SliceString  []string          `env:"P"`
-	Map          map[string]string `env:"Q"`
-	PtrBool      *bool             `env:"R"`
-	NilPtr       *string           `env:"MISSING"`
-	NilPtrStruct *struct {
+	String        string            `env:"A"`
+	Int           int               `env:"B"`
+	Int8          int8              `env:"C"`
+	Int16         int16             `env:"D"`
+	Int32         int32             `env:"E"`
+	Int64         int64             `env:"F"`
+	Uint          uint              `env:"G"`
+	Uint8         uint8             `env:"H"`
+	Uint16        uint16            `env:"I"`
+	Uint32        uint32            `env:"J"`
+	Uint64        uint64            `env:"K"`
+	Float32       float32           `env:"L"`
+	Float64       float64           `env:"M"`
+	Bool          bool              `env:"N"`
+	ArrString     [2]string         `env:"O"`
+	SliceString   []string          `env:"P"`
+	Map           map[string]string `env:"Q"`
+	PtrBool       *bool             `env:"R"`
+	NilPtrIgnored *int              `env:"-"`
+	NilPtr        *string           `env:"MISSING"`
+	NilPtrStruct  *struct {
 		A string  `env:"A"`
 		B *string `env:"MISSING"`
 	}
@@ -350,6 +352,8 @@ type Config struct {
 	CustomTextUnmarshaler   CustomTextUnmarshaler   `env:"CUSTOM_TEXT"`
 	CustomBinaryUnmarshaler CustomBinaryUnmarshaler `env:"CUSTOM_BINARY"`
 	CustomJSONUnmarshaler   CustomJSONUnmarshaler   `env:"CUSTOM_JSON"`
+
+	CustomString CustomString `env:"CUSTOM_TEXT"`
 
 	CustomTextUnmarshaler2   CustomTextUnmarshaler    `env:"CUSTOM"`
 	CustomBinaryUnmarshaler2 CustomBinaryUnmarshaler  `env:"CUSTOM"`
@@ -395,6 +399,13 @@ type CustomJSONUnmarshaler struct {
 
 func (c *CustomJSONUnmarshaler) UnmarshalJSON(text []byte) error {
 	c.Value = "***" + string(text) + "3***"
+	return nil
+}
+
+type CustomString string
+
+func (c *CustomString) UnmarshalJSON(text []byte) error {
+	*c = CustomString("***" + string(text) + "***")
 	return nil
 }
 
@@ -821,6 +832,175 @@ func TestNilPointer(t *testing.T) {
 	err := envconfig.Read((*Config)(nil))
 
 	assertErr(t, err, "envconfig: nil holder")
+}
+
+func TestPointerStructDeallocation(t *testing.T) {
+	type Sub struct {
+		Host string `env:"HOST"`
+		Port int    `env:"PORT"`
+	}
+
+	t.Run("nil_when_no_env_vars_set", func(t *testing.T) {
+		type Config struct {
+			DB *Sub `envPrefix:"DB"`
+		}
+
+		le := func(key string) (string, bool) {
+			return "", false
+		}
+
+		var cfg Config
+		if err := envconfig.Read(&cfg, le); err != nil {
+			t.Fatal(err)
+		}
+
+		if cfg.DB != nil {
+			t.Errorf("expected DB to be nil, got %+v", cfg.DB)
+		}
+	})
+
+	t.Run("allocated_when_any_env_var_set", func(t *testing.T) {
+		type Config struct {
+			DB *Sub `envPrefix:"DB"`
+		}
+
+		le := func(key string) (string, bool) {
+			if key == "DB_HOST" {
+				return "localhost", true
+			}
+			return "", false
+		}
+
+		var cfg Config
+		if err := envconfig.Read(&cfg, le); err != nil {
+			t.Fatal(err)
+		}
+
+		if cfg.DB == nil {
+			t.Fatal("expected DB to be allocated")
+		}
+		if cfg.DB.Host != "localhost" {
+			t.Errorf("expected Host=localhost, got %q", cfg.DB.Host)
+		}
+		if cfg.DB.Port != 0 {
+			t.Errorf("expected Port=0, got %d", cfg.DB.Port)
+		}
+	})
+
+	t.Run("nested_pointer_struct_nil", func(t *testing.T) {
+		type Inner struct {
+			Cert string `env:"CERT"`
+		}
+		type Outer struct {
+			Host string `env:"HOST"`
+			TLS  *Inner `envPrefix:"TLS"`
+		}
+		type Config struct {
+			DB *Outer `envPrefix:"DB"`
+		}
+
+		le := func(key string) (string, bool) {
+			if key == "DB_HOST" {
+				return "localhost", true
+			}
+			return "", false
+		}
+
+		var cfg Config
+		if err := envconfig.Read(&cfg, le); err != nil {
+			t.Fatal(err)
+		}
+
+		if cfg.DB == nil {
+			t.Fatal("expected DB to be allocated")
+		}
+		if cfg.DB.TLS != nil {
+			t.Errorf("expected TLS to be nil, got %+v", cfg.DB.TLS)
+		}
+	})
+}
+
+func TestUnmarshalerInCompositeTypes(t *testing.T) {
+	t.Run("slice_of_text_unmarshaler", func(t *testing.T) {
+		type Config struct {
+			Values []CustomString `env:"VALUES"`
+		}
+
+		le := func(key string) (string, bool) {
+			if key == "VALUES" {
+				return "hello,world", true
+			}
+			return "", false
+		}
+
+		var cfg Config
+		if err := envconfig.Read(&cfg, le); err != nil {
+			t.Fatal(err)
+		}
+
+		if len(cfg.Values) != 2 {
+			t.Fatalf("expected 2 elements, got %d", len(cfg.Values))
+		}
+		if cfg.Values[0] != "***hello***" {
+			t.Errorf("expected ***hello***, got %q", cfg.Values[0])
+		}
+		if cfg.Values[1] != "***world***" {
+			t.Errorf("expected ***world***, got %q", cfg.Values[1])
+		}
+	})
+
+	t.Run("map_value_text_unmarshaler", func(t *testing.T) {
+		type Config struct {
+			Values map[string]CustomString `env:"VALUES"`
+		}
+
+		le := func(key string) (string, bool) {
+			if key == "VALUES" {
+				return "a=hello,b=world", true
+			}
+			return "", false
+		}
+
+		var cfg Config
+		if err := envconfig.Read(&cfg, le); err != nil {
+			t.Fatal(err)
+		}
+
+		if len(cfg.Values) != 2 {
+			t.Fatalf("expected 2 entries, got %d", len(cfg.Values))
+		}
+		if cfg.Values["a"] != "***hello***" {
+			t.Errorf("expected ***hello***, got %q", cfg.Values["a"])
+		}
+		if cfg.Values["b"] != "***world***" {
+			t.Errorf("expected ***world***, got %q", cfg.Values["b"])
+		}
+	})
+
+	t.Run("array_of_text_unmarshaler", func(t *testing.T) {
+		type Config struct {
+			Values [2]CustomString `env:"VALUES"`
+		}
+
+		le := func(key string) (string, bool) {
+			if key == "VALUES" {
+				return "hello,world", true
+			}
+			return "", false
+		}
+
+		var cfg Config
+		if err := envconfig.Read(&cfg, le); err != nil {
+			t.Fatal(err)
+		}
+
+		if cfg.Values[0] != "***hello***" {
+			t.Errorf("expected ***hello***, got %q", cfg.Values[0])
+		}
+		if cfg.Values[1] != "***world***" {
+			t.Errorf("expected ***world***, got %q", cfg.Values[1])
+		}
+	})
 }
 
 func assertErr(t *testing.T, err error, exp string) {
