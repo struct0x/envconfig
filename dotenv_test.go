@@ -125,7 +125,7 @@ func TestEnvFileReader(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			envFile := filepath.Join(tempDir, tc.name+".env")
-			if err := os.WriteFile(envFile, []byte(tc.fileContent), 0644); err != nil {
+			if err := os.WriteFile(envFile, []byte(tc.fileContent), 0o644); err != nil {
 				t.Fatalf("Failed to write test file: %v", err)
 			}
 
@@ -143,10 +143,16 @@ func TestEnvFileReader(t *testing.T) {
 }
 
 func TestEnvFileReaderUnknownFile(t *testing.T) {
-	defer func() {
-		_ = recover()
-	}()
+	const env = "__RANDOM_ENV__"
+	t.Setenv(env, "exists")
 
-	EnvFileLookup("non_existent.env")
-	t.Fatalf("should not be called")
+	le := EnvFileLookup("non_existent.env")
+
+	v, ok := le("__RANDOM_ENV__")
+	if !ok {
+		t.Fatalf("Expected %q to exists", env)
+	}
+	if v != "exists" {
+		t.Fatalf("expected %q to have `exists` value, got: %q", env, v)
+	}
 }

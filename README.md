@@ -96,7 +96,7 @@ func main() {
 Notes:
 
 - If both the .env file and the OS define a key, the OS environment value wins.
-- EnvFileLookup panics if the file cannot be read.
+- EnvFileLookup falls back to OS env if a file cannot be read.
 
 ## Tags
 
