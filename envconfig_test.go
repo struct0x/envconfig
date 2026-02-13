@@ -89,10 +89,19 @@ func TestReadValues(t *testing.T) {
 			"key1": "value1",
 			"key2": "value2",
 		},
-		PtrBool:       ptr(true),
+		PtrBool: ptr(true),
+		NilPtr:  nil,
+		NilPtrStruct: ptr(struct {
+			A string  `env:"A"`
+			B *string `env:"MISSING"`
+		}{
+			A: "hello",
+			B: nil,
+		}),
 		PtrPtrBool:    ptr(ptr(true)),
-		StringDefault: "Default Value",
 		Bytes:         []byte("bytes"),
+		StringDefault: "Default Value",
+		MissingValue:  "",
 		CustomTextUnmarshaler: CustomTextUnmarshaler{
 			Value: "***custom_text***",
 		},
@@ -309,26 +318,31 @@ type Config struct {
 	NotPopulated string `env:"-"`
 	unexported   string
 
-	String      string            `env:"A"`
-	Int         int               `env:"B"`
-	Int8        int8              `env:"C"`
-	Int16       int16             `env:"D"`
-	Int32       int32             `env:"E"`
-	Int64       int64             `env:"F"`
-	Uint        uint              `env:"G"`
-	Uint8       uint8             `env:"H"`
-	Uint16      uint16            `env:"I"`
-	Uint32      uint32            `env:"J"`
-	Uint64      uint64            `env:"K"`
-	Float32     float32           `env:"L"`
-	Float64     float64           `env:"M"`
-	Bool        bool              `env:"N"`
-	ArrString   [2]string         `env:"O"`
-	SliceString []string          `env:"P"`
-	Map         map[string]string `env:"Q"`
-	PtrBool     *bool             `env:"R"`
-	PtrPtrBool  **bool            `env:"S"`
-	Bytes       []byte            `env:"T"`
+	String       string            `env:"A"`
+	Int          int               `env:"B"`
+	Int8         int8              `env:"C"`
+	Int16        int16             `env:"D"`
+	Int32        int32             `env:"E"`
+	Int64        int64             `env:"F"`
+	Uint         uint              `env:"G"`
+	Uint8        uint8             `env:"H"`
+	Uint16       uint16            `env:"I"`
+	Uint32       uint32            `env:"J"`
+	Uint64       uint64            `env:"K"`
+	Float32      float32           `env:"L"`
+	Float64      float64           `env:"M"`
+	Bool         bool              `env:"N"`
+	ArrString    [2]string         `env:"O"`
+	SliceString  []string          `env:"P"`
+	Map          map[string]string `env:"Q"`
+	PtrBool      *bool             `env:"R"`
+	NilPtr       *string           `env:"MISSING"`
+	NilPtrStruct *struct {
+		A string  `env:"A"`
+		B *string `env:"MISSING"`
+	}
+	PtrPtrBool **bool `env:"S"`
+	Bytes      []byte `env:"T"`
 
 	StringDefault string `env:"MISSING" envDefault:"Default Value"`
 	MissingValue  string `env:"MISSING"`

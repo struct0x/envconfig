@@ -63,7 +63,8 @@ type LookupEnv = func(string) (string, bool)
 //   - time.Duration (parsed via time.ParseDuration)
 //   - arrays, slices: comma-separated values (e.g. "a,b,c")
 //   - maps: comma-separated k=v pairs (e.g. "k1=v1,k2=v2"); split on first "="
-//   - pointers to any supported type (allocated as needed)
+//   - pointers to any supported type (allocated only when a value is set;
+//     left nil otherwise - including pointer-to-struct fields where no descendant env var is found)
 //   - any type implementing (in the priority) json.Unmarshaler > encoding.BinaryUnmarshaler > encoding.TextUnmarshaler
 //
 // Precedence per leaf field:
@@ -104,7 +105,8 @@ func Read[T any](holder *T, lookupEnv ...LookupEnv) error {
 		return fmt.Errorf("envconfig.Read only accepts a struct, got %q", tp.Kind().String())
 	}
 
-	return read(lookupEnvFunc, "", holder)
+	_, err := read(lookupEnvFunc, "", holder)
+	return err
 }
 
 // EnvGetter provides a convenient way to get values from env variables.
@@ -153,7 +155,8 @@ func (g *getter) ReadIntoStruct(prefix string, target any) error {
 	if tp.Elem().Kind() != reflect.Struct {
 		return fmt.Errorf("envconfig: Read target must be a pointer to struct, got pointer to %q", tp.Elem().Kind())
 	}
-	return read(g.lookup, prefix+"_", target)
+	_, err := read(g.lookup, prefix+"_", target)
+	return err
 }
 
 // EnvCollector is an advanced interface for collecting custom environment variables
@@ -167,10 +170,12 @@ type EnvCollector interface {
 	CollectEnv(env EnvGetter) error
 }
 
-func read(le func(string) (string, bool), prefix string, holder any) error {
+func read(le func(string) (string, bool), prefix string, holder any) (bool, error) {
 	holderPtr := reflect.ValueOf(holder)
 	holderValue := holderPtr.Elem()
 	fields := reflect.VisibleFields(holderValue.Type())
+
+	populated := false
 
 	for _, field := range fields {
 		if field.PkgPath != "" {
@@ -179,50 +184,62 @@ func read(le func(string) (string, bool), prefix string, holder any) error {
 
 		fieldVal := holderValue.FieldByName(field.Name)
 		ft := field.Type
+
+		allocated := false
 		if ft.Kind() == reflect.Ptr {
 			if fieldVal.IsNil() {
 				fieldVal.Set(reflect.New(ft.Elem()))
 			}
 			ft = ft.Elem()
 			fieldVal = fieldVal.Elem()
+
+			allocated = true
 		}
 
 		if fieldVal.CanAddr() {
 			if fieldVal.Type().Implements(envCollectorType) {
-				return fmt.Errorf("envconfig: field %q implements EnvCollector but not for a pointer receiver", field.Name)
+				return false, fmt.Errorf("envconfig: field %q implements EnvCollector but not for a pointer receiver", field.Name)
 			}
 
 			if collector, ok := fieldVal.Addr().Interface().(EnvCollector); ok {
 				get := &getter{lookup: le}
 				if err := collector.CollectEnv(get); err != nil {
-					return fmt.Errorf("envconfig: %q CollectEnv failed: %w", field.Name, err)
+					return false, fmt.Errorf("envconfig: %q CollectEnv failed: %w", field.Name, err)
 				}
+				populated = true
 				continue
 			}
 		}
 
 		env, hasEnv := field.Tag.Lookup("env")
 		if env == "-" {
+			if allocated {
+				orgVal := holderValue.FieldByName(field.Name)
+				orgVal.Set(reflect.Zero(orgVal.Type()))
+			}
 			continue
 		}
 		if hasEnv && env == "" {
-			return fmt.Errorf("envconfig: tag \"env\" can't be empty: %q", field.Name)
+			return false, fmt.Errorf("envconfig: tag \"env\" can't be empty: %q", field.Name)
 		}
 
 		pref, hasPrefix := field.Tag.Lookup("envPrefix")
 		if hasEnv && hasPrefix {
-			return fmt.Errorf("envconfig: both \"env\"  and \"envPrefix\" does not make sense. If a field is a struct pick \"envPrefix\" if you want to populate it using composite env keys, use \"env\" if you implement encoding.TextUnmarshaler / encoding.BinaryUnmarshaler / json.Unmarshaler, or remove tags to treat is flat")
+			return false, fmt.Errorf("envconfig: both \"env\"  and \"envPrefix\" does not make sense. If a field is a struct pick \"envPrefix\" if you want to populate it using composite env keys, use \"env\" if you implement encoding.TextUnmarshaler / encoding.BinaryUnmarshaler / json.Unmarshaler, or remove tags to treat is flat")
 		}
 		if hasPrefix && pref == "" {
-			return fmt.Errorf("envconfig: tag \"envPrefix\" can't be empty: %q", field.Name)
+			return false, fmt.Errorf("envconfig: tag \"envPrefix\" can't be empty: %q", field.Name)
 		}
 
 		if ft.Kind() == reflect.Struct {
 			if !hasEnv && !hasPrefix {
-				if err := read(le, prefix, fieldVal.Addr().Interface()); err != nil {
-					return err
+				childPopulated, err := read(le, prefix, fieldVal.Addr().Interface())
+				if err != nil {
+					return false, err
 				}
-
+				if childPopulated {
+					populated = true
+				}
 				continue
 			}
 
@@ -231,29 +248,41 @@ func read(le func(string) (string, bool), prefix string, holder any) error {
 				if prefix != "" {
 					realPref = prefix + realPref
 				}
-				if err := read(le, realPref, fieldVal.Addr().Interface()); err != nil {
-					return err
+				childPopulated, err := read(le, realPref, fieldVal.Addr().Interface())
+				if err != nil {
+					return false, err
 				}
-
+				if childPopulated {
+					populated = true
+				} else if allocated {
+					orgVal := holderValue.FieldByName(field.Name)
+					orgVal.Set(reflect.Zero(orgVal.Type()))
+				}
 				continue
 			}
 		}
 
 		if !hasEnv {
-			return fmt.Errorf("envconfig: field %q does not have \"env\" tag", field.Name)
+			return false, fmt.Errorf("envconfig: field %q does not have \"env\" tag", field.Name)
 		}
 
 		envVal, ok := le(prefix + env)
 		if !ok {
 			defaultVal, hasDefault := field.Tag.Lookup("envDefault")
 			if !hasDefault && field.Tag.Get("envRequired") == "true" {
-				return fmt.Errorf("envconfig: required field %q is empty", prefix+env)
+				return false, fmt.Errorf("envconfig: required field %q is empty", prefix+env)
 			} else if !hasDefault {
+				if allocated {
+					orgVal := holderValue.FieldByName(field.Name)
+					orgVal.Set(reflect.Zero(orgVal.Type()))
+				}
 				continue
 			}
 
 			envVal = defaultVal
 		}
+
+		populated = true
 
 		if fieldVal.CanAddr() {
 			var fn func(val []byte) error
@@ -269,21 +298,21 @@ func read(le func(string) (string, bool), prefix string, holder any) error {
 
 			if fn != nil {
 				if err := fn([]byte(envVal)); err != nil {
-					return fmt.Errorf("envconfig: error decoding %q field: %w", field.Name, err)
+					return false, fmt.Errorf("envconfig: error decoding %q field: %w", field.Name, err)
 				}
 				continue
 			}
 			if fieldVal.Kind() == reflect.Struct {
-				return fmt.Errorf("envconfig: field %q is a struct with \"env\" tag but does not implement encoding.TextUnmarshaler / encoding.BinaryUnmarshaler / json.Unmarshaler", field.Name)
+				return false, fmt.Errorf("envconfig: field %q is a struct with \"env\" tag but does not implement encoding.TextUnmarshaler / encoding.BinaryUnmarshaler / json.Unmarshaler", field.Name)
 			}
 		}
 
 		if err := setValue(fieldVal, envVal); err != nil {
-			return fmt.Errorf("envconfig: field %q failed to populate: %w", field.Name, err)
+			return false, fmt.Errorf("envconfig: field %q failed to populate: %w", field.Name, err)
 		}
 	}
 
-	return nil
+	return populated, nil
 }
 
 var (
@@ -301,14 +330,23 @@ func setValue(inp reflect.Value, value string) error {
 	}
 
 	if inp.CanAddr() {
-		if u, ok := inp.Addr().Interface().(json.Unmarshaler); ok {
-			return u.UnmarshalJSON([]byte(value))
+		var fn func(val []byte) error
+		if u, ok := inp.Addr().Interface().(encoding.TextUnmarshaler); ok {
+			fn = u.UnmarshalText
 		}
 		if u, ok := inp.Addr().Interface().(encoding.BinaryUnmarshaler); ok {
-			return u.UnmarshalBinary([]byte(value))
+			fn = u.UnmarshalBinary
 		}
-		if u, ok := inp.Addr().Interface().(encoding.TextUnmarshaler); ok {
-			return u.UnmarshalText([]byte(value))
+		if u, ok := inp.Addr().Interface().(json.Unmarshaler); ok {
+			fn = u.UnmarshalJSON
+		}
+
+		if fn != nil {
+			if err := fn([]byte(value)); err != nil {
+				return fmt.Errorf("envconfig: error decoding %q field: %w", inp.String(), err)
+			}
+
+			return nil
 		}
 	}
 

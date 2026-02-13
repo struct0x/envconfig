@@ -38,8 +38,9 @@ type HTTPServer struct {
 	Host    string            `env:"HOST" envDefault:"127.0.0.1"`
 	Port    int               `env:"PORT" envRequired:"true"`
 	Enabled bool              `env:"ENABLED"`
-	Tags    []string          `env:"TAGS"`    // "a,b,c" -> []string{"a","b","c"}
-	Headers map[string]string `env:"HEADERS"` // "k1=v1,k2=v2"
+	Tags    []string          `env:"TAGS"`     // "a,b,c" -> []string{"a","b","c"}
+	Headers map[string]string `env:"HEADERS"`  // "k1=v1,k2=v2"
+	DB      *DBConfig         `envPrefix:"DB"` // nil when no DB_* vars are set
 }
 
 func main() {
@@ -213,7 +214,7 @@ type T struct {
 - time.Duration via time.ParseDuration
 - Arrays and slices (comma-separated values): "a,b,c"
 - Maps (comma-separated key=value pairs): "k1=v1,k2=v2"
-- Pointers to supported types (allocated when needed)
+- Pointers to supported types (allocated only when a value is set; nil otherwise)
 - Custom types implementing in the following priority:
     - json.Unmarshaler > BinaryUnmarshaler > TextUnmarshaler
 
