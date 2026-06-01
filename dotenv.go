@@ -40,8 +40,8 @@ func EnvFileLookup(filePath string) func(string) (string, bool) {
 				continue
 			}
 
-			if strings.HasPrefix(line, "export ") {
-				line = strings.TrimSpace(strings.TrimPrefix(line, "export "))
+			if after, ok := strings.CutPrefix(line, "export "); ok {
+				line = strings.TrimSpace(after)
 			}
 
 			parts := strings.SplitN(line, "=", 2)

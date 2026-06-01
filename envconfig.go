@@ -95,8 +95,8 @@ func Read[T any](holder *T, lookupEnv ...LookupEnv) error {
 		lookupEnvFunc = lookupEnv[0]
 	}
 
-	tp := reflect.TypeOf(holder)
-	if tp.Kind() != reflect.Ptr {
+	tp := reflect.TypeFor[*T]()
+	if tp.Kind() != reflect.Pointer {
 		panic("envconfig: unreachable")
 	}
 
@@ -135,7 +135,7 @@ func (g *getter) Lookup(key string) (string, bool) {
 
 func (g *getter) ReadValue(key string, target any) error {
 	v := reflect.ValueOf(target)
-	if v.Kind() != reflect.Ptr {
+	if v.Kind() != reflect.Pointer {
 		return fmt.Errorf("%q not a pointer", v.Type())
 	}
 
@@ -149,7 +149,7 @@ func (g *getter) ReadValue(key string, target any) error {
 
 func (g *getter) ReadIntoStruct(prefix string, target any) error {
 	tp := reflect.TypeOf(target)
-	if tp.Kind() != reflect.Ptr {
+	if tp.Kind() != reflect.Pointer {
 		return fmt.Errorf("envconfig: Read target must be a pointer, got %q", tp.Kind())
 	}
 	if tp.Elem().Kind() != reflect.Struct {
@@ -186,7 +186,7 @@ func read(le func(string) (string, bool), prefix string, holder any) (bool, erro
 		ft := field.Type
 
 		allocated := false
-		if ft.Kind() == reflect.Ptr {
+		if ft.Kind() == reflect.Pointer {
 			if fieldVal.IsNil() {
 				fieldVal.Set(reflect.New(ft.Elem()))
 			}
@@ -316,13 +316,13 @@ func read(le func(string) (string, bool), prefix string, holder any) (bool, erro
 }
 
 var (
-	durationType     = reflect.TypeOf(time.Duration(0))
-	byteSliceType    = reflect.TypeOf([]byte{})
-	envCollectorType = reflect.TypeOf((*EnvCollector)(nil)).Elem()
+	durationType     = reflect.TypeFor[time.Duration]()
+	byteSliceType    = reflect.TypeFor[[]byte]()
+	envCollectorType = reflect.TypeFor[EnvCollector]()
 )
 
 func setValue(inp reflect.Value, value string) error {
-	if inp.Kind() == reflect.Ptr {
+	if inp.Kind() == reflect.Pointer {
 		if inp.IsNil() {
 			inp.Set(reflect.New(inp.Type().Elem()))
 		}
@@ -407,7 +407,7 @@ func setValue(inp reflect.Value, value string) error {
 		}
 	case reflect.Slice:
 		arr := split(value)
-		for i := 0; i < len(arr); i++ {
+		for i := range arr {
 			elem := reflect.New(inp.Type().Elem()).Elem()
 			err := setValue(elem, arr[i])
 			if err != nil {
@@ -421,7 +421,7 @@ func setValue(inp reflect.Value, value string) error {
 			return nil
 		}
 		mp := reflect.MakeMap(inp.Type())
-		for i := 0; i < len(arr); i++ {
+		for i := range arr {
 			kv := strings.SplitN(arr[i], "=", 2)
 			if len(kv) != 2 {
 				return fmt.Errorf("invalid map value %s", value)
