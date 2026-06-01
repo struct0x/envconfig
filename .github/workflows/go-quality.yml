@@ -11,14 +11,14 @@ jobs:
     name: Code Quality
     runs-on: ubuntu-latest
     steps:
+      - name: Check out code
+        uses: actions/checkout@v5
+
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: true
-
-      - name: Check out code
-        uses: actions/checkout@v5
 
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v8
