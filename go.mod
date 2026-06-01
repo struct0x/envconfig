@@ -1,3 +1,3 @@
 module github.com/struct0x/envconfig
 
-go 1.24
+go 1.25
